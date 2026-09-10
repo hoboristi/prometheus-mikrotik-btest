@@ -3,6 +3,7 @@ Prometheus exporter for bandwith test on Mikrotik devices
 
 ## Pre-requisites on mikrotik routers
 • user rights needed: read, test, api
+
 • disable auth for /tools/btest server
 
 ## Usage
