@@ -77,8 +77,40 @@ class RouterOSApi:
             raise Exception(f"API Authentication Error: {response}")
 
 
+def run_single_direction_test(api, target_ip, direction):
+    """Runs a bandwidth test in a single direction ('rx' or 'tx') and returns the measured speed in bps"""
+    measured_bps = 0
+    cmd = [
+        '/tool/bandwidth-test',
+        f'=address={target_ip}',
+        f'=duration={TEST_DURATION}s',
+        '=protocol=udp',
+        f'=direction={direction}'
+    ]
+    api.write_sentence(cmd)
+
+    start_time = time.time()
+    prefix = f'={direction}-'
+    
+    while time.time() - start_time < (TEST_DURATION + 5):
+        sentence = api.read_sentence()
+        if not sentence:
+            continue
+
+        for word in sentence:
+            if word.startswith(f'{prefix}10sec-average=') or word.startswith(f'{prefix}current='):
+                val = word.split('=')[-1]
+                if val.isdigit() and int(val) > 0:
+                    measured_bps = int(val)
+
+        if '!done' in sentence:
+            break
+
+    return measured_bps
+
+
 def run_btest(router_ip, target_ip):
-    """Executes the bandwidth test and returns the measured metrics"""
+    """Executes RX and TX bandwidth tests sequentially"""
     rx_bps, tx_bps = 0, 0
     api = None
 
@@ -86,34 +118,14 @@ def run_btest(router_ip, target_ip):
         api = RouterOSApi(router_ip, API_PORT)
         api.login(API_USER, API_PASS)
 
-        cmd = [
-            '/tool/bandwidth-test',
-            f'=address={target_ip}',
-            f'=duration={TEST_DURATION}s',
-            '=protocol=udp',
-            '=direction=both'
-        ]
-        api.write_sentence(cmd)
+        # 1. Step: Measure RX (Download)
+        rx_bps = run_single_direction_test(api, target_ip, 'rx')
 
-        start_time = time.time()
-        
-        while time.time() - start_time < (TEST_DURATION + 5):
-            sentence = api.read_sentence()
-            if not sentence:
-                continue
+        # Short pause between test passes to stabilize network traffic
+        time.sleep(1)
 
-            for word in sentence:
-                if word.startswith('=rx-10sec-average=') or word.startswith('=rx-current='):
-                    val = word.split('=')[-1]
-                    if val.isdigit() and int(val) > 0:
-                        rx_bps = int(val)
-                elif word.startswith('=tx-10sec-average=') or word.startswith('=tx-current='):
-                    val = word.split('=')[-1]
-                    if val.isdigit() and int(val) > 0:
-                        tx_bps = int(val)
-
-            if '!done' in sentence:
-                break
+        # 2. Step: Measure TX (Upload)
+        tx_bps = run_single_direction_test(api, target_ip, 'tx')
 
         print(f"[Test Successful] Router: {router_ip} -> Target: {target_ip} | RX: {rx_bps / 1_000_000:.2f} Mbps | TX: {tx_bps / 1_000_000:.2f} Mbps")
 
