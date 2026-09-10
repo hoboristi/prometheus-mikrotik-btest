@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  mikrotik-btest-exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mikrotik_btest_exporter
+    restart: unless-stopped
+    ports:
+      - "9115:9115"
+    environment:
+      - API_USER=admin
+      - API_PASS=secret-pass
+      - API_PORT=8728
+      - EXPORTER_PORT=9115
+      - TEST_DURATION=10
