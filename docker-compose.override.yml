@@ -1,8 +1,10 @@
 services:
   mikrotik-btest-exporter:
     environment:
-      - API_USER=local_admin
-      - API_PASS=local_secret_password
-      - TEST_DURATION=5
+      - API_USER=admin
+      - API_PASS=secret_password
+      - API_PORT=8728
+      - EXPORTER_PORT=9115
+      - TEST_DURATION=10
     ports:
       - "9115:9115"
