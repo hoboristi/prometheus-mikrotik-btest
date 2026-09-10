@@ -78,7 +78,7 @@ class RouterOSApi:
 
 
 def run_single_direction_test(api, target_ip, direction):
-    """Runs a bandwidth test in RouterOS v7 for a single direction ('rx' or 'tx')"""
+    """Runs a bandwidth test in RouterOS v7 using 'receive' or 'transmit'"""
     last_valid_bps = 0
     cmd = [
         '/tool/bandwidth-test',
@@ -90,7 +90,8 @@ def run_single_direction_test(api, target_ip, direction):
     api.write_sentence(cmd)
 
     start_time = time.time()
-    
+    metric_prefix = 'rx' if direction == 'receive' else 'tx'
+
     while time.time() - start_time < (TEST_DURATION + 5):
         try:
             sentence = api.read_sentence()
@@ -100,7 +101,6 @@ def run_single_direction_test(api, target_ip, direction):
         if not sentence:
             continue
 
-        # Check for RouterOS API errors (!trap)
         if '!trap' in sentence:
             print(f"[ROS7 API Trap/Error] Direction: {direction} | Response: {sentence}")
             break
@@ -110,16 +110,8 @@ def run_single_direction_test(api, target_ip, direction):
                 parts = word.lstrip('=').split('=')
                 if len(parts) == 2:
                     key, val = parts[0], parts[1]
-                    
-                    # RouterOS v7 matchers for speed values:
-                    # Matches: rx-current, rx-10sec-average, rx-speed, rx, tx-current, tx-speed, etc.
-                    is_matching_key = (
-                        key == direction or
-                        key.startswith(f"{direction}-") or
-                        key.endswith(f"-{direction}")
-                    )
-                    
-                    if is_matching_key and val.isdigit():
+                    # Parse ROS v7 returned metrics: rx-current, rx-10sec-average, tx-current, etc.
+                    if key.startswith(metric_prefix) and val.isdigit():
                         current_val = int(val)
                         if current_val > 0:
                             last_valid_bps = current_val
@@ -131,25 +123,25 @@ def run_single_direction_test(api, target_ip, direction):
 
 
 def run_btest(router_ip, target_ip):
-    """Executes RX and TX bandwidth tests using separate fresh API connections"""
+    """Executes RX (receive) and TX (transmit) tests sequentially via isolated socket connections"""
     rx_bps, tx_bps = 0, 0
 
-    # 1. Step: Measure RX (Download)
+    # 1. Step: Measure RX (Receive / Download)
     try:
         api_rx = RouterOSApi(router_ip, API_PORT)
         api_rx.login(API_USER, API_PASS)
-        rx_bps = run_single_direction_test(api_rx, target_ip, 'rx')
+        rx_bps = run_single_direction_test(api_rx, target_ip, 'receive')
         api_rx.close()
     except Exception as e:
         print(f"[Test Error RX] Router: {router_ip} -> Target: {target_ip} | Error: {e}")
 
     time.sleep(1)
 
-    # 2. Step: Measure TX (Upload)
+    # 2. Step: Measure TX (Transmit / Upload)
     try:
         api_tx = RouterOSApi(router_ip, API_PORT)
         api_tx.login(API_USER, API_PASS)
-        tx_bps = run_single_direction_test(api_tx, target_ip, 'tx')
+        tx_bps = run_single_direction_test(api_tx, target_ip, 'transmit')
         api_tx.close()
     except Exception as e:
         print(f"[Test Error TX] Router: {router_ip} -> Target: {target_ip} | Error: {e}")
@@ -160,7 +152,7 @@ def run_btest(router_ip, target_ip):
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
-    """Handles HTTP requests in Prometheus-compatible exposition format"""
+    """Handles HTTP requests in Prometheus exposition format"""
     def do_GET(self):
         parsed_url = urlparse(self.path)
         
@@ -178,7 +170,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
             rx_bps, tx_bps = run_btest(router_ip, target_ip)
 
-            # Prometheus TSDB text output format
+            # Output Prometheus TSDB text format
             response_content = (
                 f'# HELP mikrotik_btest_rx_bps Measured RX speed in bps\n'
                 f'# TYPE mikrotik_btest_rx_bps gauge\n'
