@@ -13,7 +13,7 @@ TEST_DURATION = int(os.environ.get('TEST_DURATION', 10))
 # ==========================================================
 
 class RouterOSApi:
-    """Raw RouterOS API client implementation for connection and encoding handling"""
+    """Raw RouterOS API client implementation compatible with RouterOS v6 and v7"""
     def __init__(self, host, port=8728):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(15)
@@ -78,7 +78,7 @@ class RouterOSApi:
 
 
 def run_single_direction_test(api, target_ip, direction):
-    """Runs a bandwidth test in a single direction ('rx' or 'tx') and returns the measured speed in bps"""
+    """Runs a bandwidth test in RouterOS v7 for a single direction ('rx' or 'tx')"""
     last_valid_bps = 0
     cmd = [
         '/tool/bandwidth-test',
@@ -91,7 +91,6 @@ def run_single_direction_test(api, target_ip, direction):
 
     start_time = time.time()
     
-    # Read output sentences until timeout or !done signal
     while time.time() - start_time < (TEST_DURATION + 5):
         try:
             sentence = api.read_sentence()
@@ -101,29 +100,41 @@ def run_single_direction_test(api, target_ip, direction):
         if not sentence:
             continue
 
-        # Inspect all key=value pairs in the returned API sentence
+        # Check for RouterOS API errors (!trap)
+        if '!trap' in sentence:
+            print(f"[ROS7 API Trap/Error] Direction: {direction} | Response: {sentence}")
+            break
+
         for word in sentence:
             if '=' in word:
                 parts = word.lstrip('=').split('=')
                 if len(parts) == 2:
                     key, val = parts[0], parts[1]
-                    # Matches keys like: rx-current, rx-10sec-average, tx-current, etc.
-                    if key.startswith(direction) and val.isdigit():
+                    
+                    # RouterOS v7 matchers for speed values:
+                    # Matches: rx-current, rx-10sec-average, rx-speed, rx, tx-current, tx-speed, etc.
+                    is_matching_key = (
+                        key == direction or
+                        key.startswith(f"{direction}-") or
+                        key.endswith(f"-{direction}")
+                    )
+                    
+                    if is_matching_key and val.isdigit():
                         current_val = int(val)
                         if current_val > 0:
                             last_valid_bps = current_val
 
-        if '!done' in sentence or '!trap' in sentence:
+        if '!done' in sentence:
             break
 
     return last_valid_bps
 
 
 def run_btest(router_ip, target_ip):
-    """Executes RX and TX bandwidth tests using fresh API connections to ensure reliability"""
+    """Executes RX and TX bandwidth tests using separate fresh API connections"""
     rx_bps, tx_bps = 0, 0
 
-    # 1. Step: Measure RX (Download) using a dedicated connection
+    # 1. Step: Measure RX (Download)
     try:
         api_rx = RouterOSApi(router_ip, API_PORT)
         api_rx.login(API_USER, API_PASS)
@@ -134,7 +145,7 @@ def run_btest(router_ip, target_ip):
 
     time.sleep(1)
 
-    # 2. Step: Measure TX (Upload) using a dedicated fresh connection
+    # 2. Step: Measure TX (Upload)
     try:
         api_tx = RouterOSApi(router_ip, API_PORT)
         api_tx.login(API_USER, API_PASS)
