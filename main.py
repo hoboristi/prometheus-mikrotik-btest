@@ -79,7 +79,7 @@ class RouterOSApi:
 
 def run_single_direction_test(api, target_ip, direction):
     """Runs a bandwidth test in a single direction ('rx' or 'tx') and returns the measured speed in bps"""
-    measured_bps = 0
+    last_valid_bps = 0
     cmd = [
         '/tool/bandwidth-test',
         f'=address={target_ip}',
@@ -90,55 +90,60 @@ def run_single_direction_test(api, target_ip, direction):
     api.write_sentence(cmd)
 
     start_time = time.time()
-    prefix = f'={direction}-'
     
+    # Read output sentences until timeout or !done signal
     while time.time() - start_time < (TEST_DURATION + 5):
-        sentence = api.read_sentence()
+        try:
+            sentence = api.read_sentence()
+        except socket.timeout:
+            break
+
         if not sentence:
             continue
 
+        # Inspect all key=value pairs in the returned API sentence
         for word in sentence:
-            if word.startswith(f'{prefix}10sec-average=') or word.startswith(f'{prefix}current='):
-                val = word.split('=')[-1]
-                if val.isdigit() and int(val) > 0:
-                    measured_bps = int(val)
+            if '=' in word:
+                parts = word.lstrip('=').split('=')
+                if len(parts) == 2:
+                    key, val = parts[0], parts[1]
+                    # Matches keys like: rx-current, rx-10sec-average, tx-current, etc.
+                    if key.startswith(direction) and val.isdigit():
+                        current_val = int(val)
+                        if current_val > 0:
+                            last_valid_bps = current_val
 
-        if '!done' in sentence:
+        if '!done' in sentence or '!trap' in sentence:
             break
 
-    return measured_bps
+    return last_valid_bps
 
 
 def run_btest(router_ip, target_ip):
-    """Executes RX and TX bandwidth tests sequentially"""
+    """Executes RX and TX bandwidth tests using fresh API connections to ensure reliability"""
     rx_bps, tx_bps = 0, 0
-    api = None
 
+    # 1. Step: Measure RX (Download) using a dedicated connection
     try:
-        api = RouterOSApi(router_ip, API_PORT)
-        api.login(API_USER, API_PASS)
-
-        # 1. Step: Measure RX (Download)
-        rx_bps = run_single_direction_test(api, target_ip, 'rx')
-
-        # Short pause between test passes to stabilize network traffic
-        time.sleep(1)
-
-        # 2. Step: Measure TX (Upload)
-        tx_bps = run_single_direction_test(api, target_ip, 'tx')
-
-        print(f"[Test Successful] Router: {router_ip} -> Target: {target_ip} | RX: {rx_bps / 1_000_000:.2f} Mbps | TX: {tx_bps / 1_000_000:.2f} Mbps")
-
+        api_rx = RouterOSApi(router_ip, API_PORT)
+        api_rx.login(API_USER, API_PASS)
+        rx_bps = run_single_direction_test(api_rx, target_ip, 'rx')
+        api_rx.close()
     except Exception as e:
-        print(f"[Test Error] Router: {router_ip} -> Target: {target_ip} | Error: {e}")
-        rx_bps, tx_bps = 0, 0
+        print(f"[Test Error RX] Router: {router_ip} -> Target: {target_ip} | Error: {e}")
 
-    finally:
-        if api:
-            try:
-                api.close()
-            except:
-                pass
+    time.sleep(1)
+
+    # 2. Step: Measure TX (Upload) using a dedicated fresh connection
+    try:
+        api_tx = RouterOSApi(router_ip, API_PORT)
+        api_tx.login(API_USER, API_PASS)
+        tx_bps = run_single_direction_test(api_tx, target_ip, 'tx')
+        api_tx.close()
+    except Exception as e:
+        print(f"[Test Error TX] Router: {router_ip} -> Target: {target_ip} | Error: {e}")
+
+    print(f"[Test Finished] Router: {router_ip} -> Target: {target_ip} | RX: {rx_bps / 1_000_000:.2f} Mbps | TX: {tx_bps / 1_000_000:.2f} Mbps")
 
     return rx_bps, tx_bps
 
