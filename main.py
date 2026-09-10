@@ -78,8 +78,9 @@ class RouterOSApi:
 
 
 def run_single_direction_test(api, target_ip, direction):
-    """Runs a bandwidth test in RouterOS v7 using 'receive' or 'transmit'"""
+    """Runs a bandwidth test in RouterOS v7 and captures average/current bitrates"""
     last_valid_bps = 0
+    max_current_bps = 0
     cmd = [
         '/tool/bandwidth-test',
         f'=address={target_ip}',
@@ -90,7 +91,7 @@ def run_single_direction_test(api, target_ip, direction):
     api.write_sentence(cmd)
 
     start_time = time.time()
-    metric_prefix = 'rx' if direction == 'receive' else 'tx'
+    prefix = 'rx' if direction == 'receive' else 'tx'
 
     while time.time() - start_time < (TEST_DURATION + 5):
         try:
@@ -107,19 +108,28 @@ def run_single_direction_test(api, target_ip, direction):
 
         for word in sentence:
             if '=' in word:
-                parts = word.lstrip('=').split('=')
+                parts = word.lstrip('=').split('=', 1)
                 if len(parts) == 2:
                     key, val = parts[0], parts[1]
-                    # Parse ROS v7 returned metrics: rx-current, rx-10sec-average, tx-current, etc.
-                    if key.startswith(metric_prefix) and val.isdigit():
-                        current_val = int(val)
-                        if current_val > 0:
-                            last_valid_bps = current_val
+                    
+                    if val.isdigit():
+                        val_int = int(val)
+                        
+                        # Preferred metrics: total-average or 10-second-average
+                        if key in (f'{prefix}-total-average', f'{prefix}-10-second-average'):
+                            if val_int > 0:
+                                last_valid_bps = val_int
+                        
+                        # Fallback metric: max current speed recorded during run
+                        elif key == f'{prefix}-current':
+                            if val_int > max_current_bps:
+                                max_current_bps = val_int
 
         if '!done' in sentence:
             break
 
-    return last_valid_bps
+    # If no average was captured, fall back to the highest current bps recorded
+    return last_valid_bps if last_valid_bps > 0 else max_current_bps
 
 
 def run_btest(router_ip, target_ip):
