@@ -11,7 +11,7 @@ services:
       - "9115:9115"
     environment:
       - API_USER=admin
-      - API_PASS=secret-pass
+      - API_PASS=secret_password
       - API_PORT=8728
       - EXPORTER_PORT=9115
       - TEST_DURATION=10
